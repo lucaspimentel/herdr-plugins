@@ -16,6 +16,11 @@ directory it does nothing and workspaces keep their herdr-assigned names.
   falls back to `template-no-git` or a git lookup in the workspace cwd.
 - `pane.agent_detected`: fills `{agent-kind}` for workspaces that still
   carry their birth label (gated by `rename-on-agent-detect`).
+- `pane.focused` / `pane.agent_status_changed`: re-render the template when
+  the workspace cwd changed since the last event (gated by
+  `rename-on-cwd-change`); herdr emits no event for `cd` itself, so these
+  hooks pick the change up on the next focus or agent status transition.
+  They exit immediately when the cwd is unchanged.
 - `[[startup]]`: re-applies the template to existing workspaces after a
   session restore (gated by `adopt-existing`).
 - A manual action, "Re-apply rename template", re-renders the current
@@ -65,6 +70,7 @@ Then edit `template`. Until `template` is set, the plugin stays inert.
 | `[repo-alias]`           | (empty)            | TOML table mapping repo names to display strings for `{repo-name}`; unmapped repos keep their full name |
 | `only-rename-unmodified` | `true`             | Never rename a workspace whose label was changed after creation; set `false` to always re-apply |
 | `rename-on-agent-detect` | `true`             | Also rename when an agent is detected in a workspace still carrying its birth label |
+| `rename-on-cwd-change`   | `true`             | Re-render on focus or agent status change after the workspace cwd changed; herdr's auto-naming from the old cwd is not treated as a manual rename |
 | `adopt-existing`         | `true`             | On startup and agent detection, rename never-before-seen workspaces; set `false` to only record their labels, protecting names that predate the install |
 
 ## Template variables

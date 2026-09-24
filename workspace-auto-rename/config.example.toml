@@ -32,6 +32,10 @@ only-rename-unmodified = true
 # its birth label (this is what fills {agent-kind}).
 rename-on-agent-detect = true
 
+# Re-render the template when the workspace cwd changes (detected on pane
+# focus and agent status changes; herdr emits no event for cd itself).
+rename-on-cwd-change = true
+
 # On startup and agent detection, treat never-before-seen workspaces as
 # unmodified and rename them. Set to false to only record their labels:
 # this protects names that predate the plugin install.

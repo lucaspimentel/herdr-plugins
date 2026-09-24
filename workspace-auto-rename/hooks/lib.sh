@@ -32,7 +32,13 @@ TEMPLATE=""
 TEMPLATE_NO_GIT='{cwd-basename}'
 ONLY_RENAME_UNMODIFIED="true"
 RENAME_ON_AGENT_DETECT="true"
+RENAME_ON_CWD_CHANGE="true"
 ADOPT_EXISTING="true"
+
+# Extra labels treated as unmodified by decide_rename, one per line. Set by
+# on-event.sh for cwd-change events so herdr's own auto-naming from a
+# previous cwd is not mistaken for a manual rename.
+EXTRA_OK_LABELS=""
 
 die() {
     printf 'workspace-auto-rename: %s\n' "$*" >&2
@@ -137,6 +143,10 @@ load_config() {
     if [ -z "$RENAME_ON_AGENT_DETECT" ]; then
         RENAME_ON_AGENT_DETECT="true"
     fi
+    RENAME_ON_CWD_CHANGE="$(config_get "$cfg" rename-on-cwd-change)"
+    if [ -z "$RENAME_ON_CWD_CHANGE" ]; then
+        RENAME_ON_CWD_CHANGE="true"
+    fi
     ADOPT_EXISTING="$(config_get "$cfg" adopt-existing)"
     if [ -z "$ADOPT_EXISTING" ]; then
         ADOPT_EXISTING="true"
@@ -171,19 +181,19 @@ render_template() {
 }
 
 # Extract the worktree entry for a workspace from a `herdr worktree list`
-# response. Preference order: the worktree opened in that workspace, then
-# the worktree whose checkout path matches the workspace cwd (a worktree can
-# be open in several workspaces but herdr records one opener), then the
-# first entry, but only when the repo has exactly one worktree (guessing a
-# branch in a multi-worktree repo risks a wrong PR number). Prints a JSON
-# object or nothing.
+# response. Preference order: the worktree whose checkout path matches the
+# workspace cwd (the pane's current location; open_workspace_id goes stale
+# after a cd), then the worktree opened in that workspace, then the first
+# entry, but only when the repo has exactly one worktree (guessing a branch
+# in a multi-worktree repo risks a wrong PR number). Prints a JSON object or
+# nothing.
 worktree_for_ws() {
     local json="$1" ws_id="$2" cwd="$3"
     # $w and $c are jq variables bound by --arg, not shell expansions.
     # shellcheck disable=SC2016
     printf '%s' "$json" | jq -c --arg w "$ws_id" --arg c "$cwd" \
-        '([.result.worktrees // [] | .[] | select(.open_workspace_id == $w)][0]
-          // ([.result.worktrees // [] | .[] | select($c != "" and .path == $c)][0])
+        '([.result.worktrees // [] | .[] | select($c != "" and .path == $c)][0]
+          // ([.result.worktrees // [] | .[] | select(.open_workspace_id == $w)][0])
           // (if ((.result.worktrees // []) | length) == 1 then (.result.worktrees // [])[0] else empty end)
           // empty)' 2>/dev/null || true
 }
@@ -391,6 +401,15 @@ decide_rename() {
         return 0
     fi
 
+    # Cwd-change events may relax the guard: herdr auto-renames workspaces
+    # after a cd (label becomes the cwd basename), which is not a manual
+    # rename. This check intentionally precedes the adopt-existing gate: a
+    # stale pre-install name after a cd is still stale.
+    if label_in_extra "$current"; then
+        printf 'rename\n'
+        return 0
+    fi
+
     if [ "$had_birth" = "1" ]; then
         if [ "$current" = "$birth" ]; then
             printf 'rename\n'
@@ -420,6 +439,30 @@ record_applied() {
     mkdir -p "$state_dir" 2>/dev/null || true
     printf '%s' "$2" > "$state_dir/applied-$1" 2>/dev/null || true
     return 0
+}
+
+# Record the cwd a workspace was last rendered from, so focus events can
+# detect cwd changes.
+record_cwd() {
+    local state_dir="${HERDR_PLUGIN_STATE_DIR:-}"
+    [ -n "$state_dir" ] || return 0
+    [ -n "$2" ] || return 0
+    mkdir -p "$state_dir" 2>/dev/null || true
+    printf '%s' "$2" > "$state_dir/cwd-$1" 2>/dev/null || true
+    return 0
+}
+
+# True when the label equals one of the extra allowed labels (one per line,
+# blank lines ignored).
+label_in_extra() {
+    local label="$1" entry
+    [ -n "$EXTRA_OK_LABELS" ] || return 1
+    while IFS= read -r entry || [ -n "$entry" ]; do
+        if [ -n "$entry" ] && [ "$label" = "$entry" ]; then
+            return 0
+        fi
+    done <<< "$EXTRA_OK_LABELS"
+    return 1
 }
 
 # Render the template for the supplied values and rename the workspace when
@@ -474,6 +517,8 @@ apply_rename() {
     new="$(printf '%s' "$new" | sed -E 's#/{2,}#/#g; s#^/+##; s#/+$##')"
     new="${new:0:LABEL_MAX}"
     new="$(trim "$new")"
+
+    record_cwd "$ws_id" "$cwd"
 
     local decision
     decision="$(decide_rename "$kind" "$ws_id" "$current" "$new")"

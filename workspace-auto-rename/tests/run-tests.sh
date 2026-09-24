@@ -433,5 +433,47 @@ run_startup
 t "P13 ambiguous skips rename" "0" "$(rename_count)"
 t "P13 birth recorded" "workspace" "$(read_state birth-w4)"
 
+# --------------------------------------------- cwd-change (pane.focused)
+
+# C1: creation records cwd; a focus event with unchanged cwd is a no-op.
+reset_env
+write_config 'template = "{repo-name} {pr}"' '[repo-alias]' 'demo-repo = "DR"'
+fixture ws-get.json '{"result":{"workspace_id":"w2","number":2,"label":"demo-repo"}}'
+fixture wt-w2.json '{"result":{"source":{"repo_name":"demo-repo"},"worktrees":[{"path":"/tmp/wt/demo-repo/main","branch":"main","open_workspace_id":"w2"},{"path":"/tmp/wt/demo-repo.feature","branch":"pr-77","open_workspace_id":null}]}}'
+fixture agent-list.json '{"result":{"agents":[{"agent":"pi","workspace_id":"w2","cwd":"/tmp/wt/demo-repo/main"}]}}'
+run_hook workspace.created "$(mk_evt_wscreate w2 demo-repo 2)" \
+    "$(mk_ctx w2 demo-repo /tmp/wt/demo-repo/main demo-repo)"
+t "C1 creation renames" "w2	DR" "$(last_rename)"
+t "C1 cwd recorded" "/tmp/wt/demo-repo/main" "$(read_state cwd-w2)"
+run_hook pane.focused "" \
+    '{"workspace_id":"w2","workspace_label":"DR","workspace_cwd":"/tmp/wt/demo-repo/main","focused_pane_cwd":"/tmp/wt/demo-repo/main"}'
+t "C1 unchanged cwd no-op" "1" "$(rename_count)"
+
+# C2: focus (and agent status change) after a cd re-renders from the new
+# cwd; herdr's auto-renamed label (new cwd basename) passes the guard.
+run_hook pane.focused "" \
+    '{"workspace_id":"w2","workspace_label":"demo-repo.feature","workspace_cwd":"/tmp/wt/demo-repo.feature","focused_pane_cwd":"/tmp/wt/demo-repo.feature"}'
+t "C2 focus after cd renames" "w2	DR #77" "$(last_rename)"
+t "C2 cwd updated" "/tmp/wt/demo-repo.feature" "$(read_state cwd-w2)"
+
+# C3: a manual rename still blocks the cwd-driven rename.
+run_hook pane.agent_status_changed "" \
+    '{"workspace_id":"w2","workspace_label":"my-name","workspace_cwd":"/tmp/wt/demo-repo/other","focused_pane_cwd":"/tmp/wt/demo-repo/other"}'
+t "C3 manual rename respected" "2" "$(rename_count)"
+
+# C4: rename-on-cwd-change=false disables the hooks entirely.
+reset_env
+write_config 'template = "{repo-name} {pr}"' 'rename-on-cwd-change = false'
+fixture wt-w2.json '{"result":{"source":{"repo_name":"demo-repo"},"worktrees":[{"path":"/tmp/wt/demo-repo.feature","branch":"pr-77","open_workspace_id":"w2"}]}}'
+run_hook pane.focused "" \
+    '{"workspace_id":"w2","workspace_label":"demo-repo.feature","workspace_cwd":"/tmp/wt/demo-repo.feature","focused_pane_cwd":"/tmp/wt/demo-repo.feature"}'
+t "C4 disabled no-op" "0" "$(rename_count)"
+
+# C5: config default is enabled.
+reset_env
+write_config 'template = "{branch}"'
+cfg="$HERDR_PLUGIN_CONFIG_DIR/config.toml"
+t "C5 default enabled" "true" "$(libeval "load_config; printf '%s' \"\$RENAME_ON_CWD_CHANGE\"")"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -44,6 +44,18 @@ command = ["bash", "hooks/on-event.sh"]
 on = "pane.agent_detected"
 command = ["bash", "hooks/on-event.sh"]
 
+# Re-render the template when the workspace cwd changes (the user cd-ed).
+# herdr emits no event for cd itself; these hooks re-check the agent cwd on
+# focus and agent status changes. Gated by the rename-on-cwd-change config
+# key; both exit immediately when the cwd is unchanged.
+[[events]]
+on = "pane.focused"
+command = ["bash", "hooks/on-event.sh"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "hooks/on-event.sh"]
+
 # Manual re-apply from the workspace context. Deliberately never hooks
 # workspace.updated or workspace.renamed: renaming from those would risk
 # event churn and recursion.

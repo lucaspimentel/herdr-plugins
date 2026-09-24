@@ -31,6 +31,19 @@ if [ "$event" = "pane.agent_detected" ] && [ "$RENAME_ON_AGENT_DETECT" != "true"
     exit 0
 fi
 
+# Cwd-change events: re-render when the workspace cwd changed since the
+# last time this workspace was seen. Gated by rename-on-cwd-change; exits
+# before any CLI call when the cwd is unchanged.
+cwd_change=""
+case "$event" in
+    pane.focused | pane.agent_status_changed)
+        if [ "$RENAME_ON_CWD_CHANGE" != "true" ]; then
+            exit 0
+        fi
+        cwd_change="1"
+        ;;
+esac
+
 # Workspace id: context, then event payload, then the caller's own workspace.
 ws_id="$(jget "$context_json" '.workspace_id // empty')"
 if [ -z "$ws_id" ]; then
@@ -41,6 +54,27 @@ if [ -z "$ws_id" ]; then
 fi
 if [ -z "$ws_id" ]; then
     exit 0
+fi
+
+recorded_cwd=""
+new_cwd=""
+if [ "$cwd_change" = "1" ]; then
+    new_cwd="$(jget "$context_json" '.focused_pane_cwd // empty')"
+    if [ -z "$new_cwd" ]; then
+        new_cwd="$(jget "$context_json" '.workspace_cwd // empty')"
+    fi
+    if [ -z "$new_cwd" ]; then
+        ag_json="$(run_herdr agent list 2>/dev/null || true)"
+        # $w is a jq variable bound by --arg, not a shell expansion.
+        # shellcheck disable=SC2016
+        new_cwd="$(jget "$ag_json" --arg w "$ws_id" '([.result.agents // [] | .[] | select(.workspace_id == $w)][0].cwd) // empty')"
+    fi
+    if [ -n "${HERDR_PLUGIN_STATE_DIR:-}" ]; then
+        recorded_cwd="$(cat "${HERDR_PLUGIN_STATE_DIR}/cwd-${ws_id}" 2>/dev/null || true)"
+    fi
+    if [ -n "$new_cwd" ] && [ "$new_cwd" = "$recorded_cwd" ]; then
+        exit 0
+    fi
 fi
 
 # Authoritative snapshot from the CLI, used as a fallback for label, number,
@@ -131,5 +165,13 @@ case "$event" in
     workspace.created | worktree.created | worktree.opened) kind="creation" ;;
     *) kind="adopt" ;;
 esac
+
+# Relax the birth-label guard for cwd-change events: herdr auto-renames
+# workspaces after a cd, and the label it assigns equals the old or new cwd
+# basename, which is not a manual rename.
+if [ "$cwd_change" = "1" ]; then
+    EXTRA_OK_LABELS="$(basename_of "$recorded_cwd")
+$(basename_of "$new_cwd")"
+fi
 
 apply_rename "$kind" "$ws_id" "$current" "$number" "$branch" "$repo" "$cwd" "$wt_path" "$agent"
