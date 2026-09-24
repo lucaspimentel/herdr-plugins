@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# fake-herdr: stub herdr CLI for tests/run-tests.sh.
+#
+# Serves fixture JSON envelopes from $FAKE_HERDR_DIR and records every
+# workspace rename call as a "ws_id<TAB>label" line appended to
+# renames.tsv. Fixture files:
+#   ws-get.json      response for `workspace get <id>` (same file for all ids)
+#   wt-<id>.json     response for `worktree list --workspace <id>`;
+#                    defaults to {"result":{"worktrees":[]}} when absent
+#   agent-list.json  response for `agent list`
+#   ws-list.json     response for `workspace list`
+
+dir="${FAKE_HERDR_DIR:?FAKE_HERDR_DIR must be set}"
+cmd="${1:-}"
+sub="${2:-}"
+shift 2 2>/dev/null || true
+
+case "$cmd" in
+    workspace)
+        case "$sub" in
+            get)
+                if [ -f "$dir/ws-get.json" ]; then
+                    cat "$dir/ws-get.json"
+                else
+                    printf '{"result":{}}'
+                fi
+                ;;
+            rename)
+                printf '%s\t%s\n' "${1:-}" "${2:-}" >> "$dir/renames.tsv"
+                printf '{"result":{}}'
+                ;;
+            list)
+                if [ -f "$dir/ws-list.json" ]; then
+                    cat "$dir/ws-list.json"
+                else
+                    printf '{"result":{"workspaces":[]}}'
+                fi
+                ;;
+            *)
+                printf '{"result":{}}'
+                ;;
+        esac
+        ;;
+    worktree)
+        # Args after `shift 2`: $1 = --workspace, $2 = <workspace id>.
+        f="$dir/wt-${2:-}.json"
+        if [ -f "$f" ]; then
+            cat "$f"
+        else
+            printf '{"result":{"worktrees":[]}}'
+        fi
+        ;;
+    agent)
+        if [ -f "$dir/agent-list.json" ]; then
+            cat "$dir/agent-list.json"
+        else
+            printf '{"result":{"agents":[]}}'
+        fi
+        ;;
+    *)
+        printf '{"result":{}}'
+        ;;
+esac

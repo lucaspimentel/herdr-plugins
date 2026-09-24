@@ -1,0 +1,44 @@
+# workspace-auto-rename configuration.
+#
+# Copy this file to the plugin config directory and rename it to config.toml:
+#
+#   herdr plugin config-dir workspace-auto-rename
+#   cp config.example.toml <that directory>/config.toml
+#
+# The plugin is inert until `template` is set: with no config.toml (or no
+# template key) workspaces keep their herdr-assigned names.
+
+# Template applied when a workspace is created or a worktree is opened.
+# Placeholders: {branch} {repo-name} {cwd-basename} {worktree-basename}
+#   {agent-kind} {agent-name} {workspace-id} {workspace-number}
+#   {current-label} {pr}
+# Unmatched placeholders render as empty strings. When no git branch is
+# known, template-no-git is used instead.
+# {pr} renders as a unit: "#1234" when a PR is found for the branch, empty
+# otherwise, so "{repo-name} {pr}" degrades to just the repo name. PRs are
+# detected from the branch name (pr-123, pr/123, pr123, 123-fix) first, then
+# via the GitHub CLI (gh) when installed. Results are cached per repo and
+# branch, including misses.
+template = "{repo-name}/{branch}"
+
+# Template used when no git branch is known (non-git working directory).
+template-no-git = "{cwd-basename}"
+
+# Never rename a workspace whose label was changed after creation, so manual
+# renames are respected. Set to false to always re-apply the template.
+only-rename-unmodified = true
+
+# Also rename when an agent is detected in a workspace that still carries
+# its birth label (this is what fills {agent-kind}).
+rename-on-agent-detect = true
+
+# On startup and agent detection, treat never-before-seen workspaces as
+# unmodified and rename them. Set to false to only record their labels:
+# this protects names that predate the plugin install.
+adopt-existing = true
+
+# Map repository names to shorter display strings for {repo-name}.
+# Repositories not listed here keep their full name.
+[repo-alias]
+serverless-components = "SCL"
+datadog-lambda-extension = "bottlecap"

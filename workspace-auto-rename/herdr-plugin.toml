@@ -1,0 +1,54 @@
+# herdr-plugin.toml: manifest for the workspace-auto-rename plugin.
+#
+# This repo (herdr-plugins) hosts multiple plugins, one per subdirectory;
+# install or link this subdirectory on its own. Renames workspaces from a
+# user-configured template ({branch}, {repo-name}, {agent-kind}, ...) when
+# they are created. The plugin is opt-in: with no config.toml in the plugin
+# config directory it does nothing and workspaces keep their herdr-assigned
+# names.
+#
+# Pure bash + jq, no build step. Platforms are limited to linux and macos:
+# the hooks are bash scripts, and herdr cannot reliably spawn relative
+# commands like these natively on Windows.
+
+id = "workspace-auto-rename"
+name = "Workspace Auto Rename"
+version = "0.1.0"
+description = "Rename workspaces from a configurable template ({branch}, {repo-name}, {agent-kind}, ...) as they are created."
+min_herdr_version = "0.9.1"
+platforms = ["linux", "macos"]
+
+# Re-apply the template to existing workspaces after a session restore.
+# Respects adopt-existing and the birth-label guard.
+[[startup]]
+command = ["bash", "hooks/rename-existing.sh"]
+
+# Worktree-backed workspaces: branch and repo are known at creation time.
+[[events]]
+on = "worktree.created"
+command = ["bash", "hooks/on-event.sh"]
+
+[[events]]
+on = "worktree.opened"
+command = ["bash", "hooks/on-event.sh"]
+
+# Plain workspaces: no branch in the event payload; falls back to
+# template-no-git or a git lookup in the workspace cwd.
+[[events]]
+on = "workspace.created"
+command = ["bash", "hooks/on-event.sh"]
+
+# Fills {agent-kind} for workspaces that still carry their birth label.
+# Gated by the rename-on-agent-detect config key.
+[[events]]
+on = "pane.agent_detected"
+command = ["bash", "hooks/on-event.sh"]
+
+# Manual re-apply from the workspace context. Deliberately never hooks
+# workspace.updated or workspace.renamed: renaming from those would risk
+# event churn and recursion.
+[[actions]]
+id = "apply-now"
+title = "Re-apply rename template"
+contexts = ["workspace"]
+command = ["bash", "hooks/on-event.sh"]
