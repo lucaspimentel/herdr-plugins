@@ -181,6 +181,16 @@ t "pattern bare 1234" "1234" "$(libeval 'pr_from_branch_pattern 1234')"
 t "pattern no match" "" "$(libeval 'pr_from_branch_pattern feature-x')"
 t "pattern no match pr-abc" "" "$(libeval 'pr_from_branch_pattern pr-abc')"
 
+# Repo name derivation from git, including linked worktree checkouts whose
+# directory is named after the branch (repo.branch-slug).
+reset_env
+git init -q -b main "$TMP/demo-repo"
+git -C "$TMP/demo-repo" commit -q --allow-empty -m init
+git -C "$TMP/demo-repo" worktree add -q -b feature-x "$TMP/demo-repo.feature-x" 2>/dev/null
+t "repo name from main checkout" "demo-repo" "$(libeval "git_repo_name '$TMP/demo-repo'")"
+t "repo name from worktree checkout" "demo-repo" "$(libeval "git_repo_name '$TMP/demo-repo.feature-x'")"
+t "repo name outside git" "" "$(libeval "git_repo_name '$TMP/gh-missing'")"
+
 # Clamp to 80 chars via apply_rename against the fake CLI.
 reset_env
 write_config 'template = "{branch}"'
@@ -384,6 +394,44 @@ run_hook worktree.created \
     "$(mk_evt_wtcreate w2 workspace 2 feature-x /tmp/wt/demo-repo/feature demo-repo)" \
     "$(mk_ctx w2 workspace /tmp/wt/demo-repo/feature demo-repo)"
 t "P9 missing gh empty render" "0" "$(rename_count)"
+
+# P10: startup resolves the repo name from worktree list source info, so the
+# alias applies even when the checkout directory is named after the branch.
+reset_env
+write_config 'template = "{repo-name} {pr}"' '[repo-alias]' 'demo-repo = "DR"'
+fixture ws-list.json '{"result":{"workspaces":[{"workspace_id":"w9","number":9,"label":"workspace"}]}}'
+fixture wt-w9.json '{"result":{"source":{"repo_name":"demo-repo"},"worktrees":[{"path":"/tmp/wt/demo-repo/pr-42","branch":"pr-42","open_workspace_id":"w9"}]}}'
+run_startup
+t "P10 startup alias via source" "w9	DR #42" "$(last_rename)"
+t "P10 birth recorded" "workspace" "$(read_state birth-w9)"
+
+# P11: startup picks the worktree opened in the workspace, not worktrees[0].
+reset_env
+write_config 'template = "{repo-name} {pr}"' '[repo-alias]' 'demo-repo = "DR"'
+fixture ws-list.json '{"result":{"workspaces":[{"workspace_id":"w8","number":8,"label":"workspace"}]}}'
+fixture wt-w8.json '{"result":{"source":{"repo_name":"demo-repo"},"worktrees":[{"path":"/tmp/wt/demo-repo/main","branch":"main","open_workspace_id":null},{"path":"/tmp/wt/demo-repo.feature","branch":"pr-99","open_workspace_id":"w8"}]}}'
+run_startup
+t "P11 selects opened worktree" "w8	DR #99" "$(last_rename)"
+
+# P12: a second workspace sharing an already-open worktree matches by path,
+# since herdr records only one opener per worktree entry.
+reset_env
+write_config 'template = "{repo-name} {pr}"' '[repo-alias]' 'demo-repo = "DR"'
+fixture ws-list.json '{"result":{"workspaces":[{"workspace_id":"w6","number":6,"label":"workspace"}]}}'
+fixture wt-w6.json '{"result":{"source":{"repo_name":"demo-repo"},"worktrees":[{"path":"/tmp/wt/demo-repo/main","branch":"main"},{"path":"/tmp/wt/demo-repo.feature","branch":"pr-77","open_workspace_id":"w7"}]}}'
+fixture agent-list.json '{"result":{"agents":[{"agent":"pi","workspace_id":"w6","cwd":"/tmp/wt/demo-repo.feature"}]}}'
+run_startup
+t "P12 shared worktree matched by path" "w6	DR #77" "$(last_rename)"
+
+# P13: an ambiguous multi-worktree repo with no opener or cwd match must not
+# guess a branch: startup records the birth label but does not rename.
+reset_env
+write_config 'template = "{repo-name} {pr}"' '[repo-alias]' 'demo-repo = "DR"'
+fixture ws-list.json '{"result":{"workspaces":[{"workspace_id":"w4","number":4,"label":"workspace"}]}}'
+fixture wt-w4.json '{"result":{"source":{"repo_name":"demo-repo"},"worktrees":[{"path":"/tmp/wt/demo-repo/main","branch":"main"},{"path":"/tmp/wt/demo-repo.feature","branch":"pr-77","open_workspace_id":"w7"}]}}'
+run_startup
+t "P13 ambiguous skips rename" "0" "$(rename_count)"
+t "P13 birth recorded" "workspace" "$(read_state birth-w4)"
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]

@@ -31,23 +31,24 @@ while IFS=$'\t' read -r ws_id label number _extra; do
     fi
 
     wt_json="$(run_herdr worktree list --workspace "$ws_id" 2>/dev/null || true)"
-    branch="$(jget "$wt_json" '.result.worktrees[0].branch // empty')"
-    wt_path="$(jget "$wt_json" '.result.worktrees[0].path // empty')"
 
     # $w is a jq variable bound by --arg, not a shell expansion.
     # shellcheck disable=SC2016
     cwd="$(jget "$ag_json" --arg w "$ws_id" '([.result.agents // [] | .[] | select(.workspace_id == $w)][0].cwd) // empty')"
+
+    wt_entry="$(worktree_for_ws "$wt_json" "$ws_id" "$cwd")"
+    branch="$(jget "$wt_entry" '.branch // empty')"
+    wt_path="$(jget "$wt_entry" '.path // empty')"
     if [ -z "$cwd" ]; then
         cwd="$wt_path"
     fi
 
-    repo=""
-    src_dir="$cwd"
-    if [ -n "$src_dir" ] && [ -d "$src_dir" ]; then
-        top="$(git -C "$src_dir" rev-parse --show-toplevel 2>/dev/null || true)"
-        if [ -n "$top" ]; then
-            repo="$(basename_of "$top")"
-        fi
+    # Repo name: herdr's worktree source info first (authoritative even for
+    # linked worktrees whose checkout directory is named after the branch),
+    # then the main git repository root for the pane cwd.
+    repo="$(jget "$wt_json" '.result.source.repo_name // empty')"
+    if [ -z "$repo" ]; then
+        repo="$(git_repo_name "$cwd")"
     fi
 
     # shellcheck disable=SC2016

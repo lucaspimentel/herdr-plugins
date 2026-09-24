@@ -92,6 +92,32 @@ basename_of() {
     printf '%s' "${p##*/}"
 }
 
+# Derive a repository display name for a directory. Prefers the main
+# repository root over the checkout path: linked worktree checkouts are
+# often named after the branch (for example "repo.branch-slug"), so the
+# checkout basename is not the repo name. Prints the name, or nothing when
+# the directory is not inside a git repository.
+git_repo_name() {
+    local dir="$1" common main top
+    if [ -z "$dir" ] || [ ! -d "$dir" ]; then
+        return 0
+    fi
+    common="$(git -C "$dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [ -n "$common" ]; then
+        main="$common"
+        case "$main" in
+            */.git/worktrees/*) main="${main%/.git/worktrees/*}" ;;
+            */.git)             main="${main%/.git}" ;;
+        esac
+        printf '%s' "$(basename_of "$main")"
+        return 0
+    fi
+    top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || true)"
+    if [ -n "$top" ]; then
+        printf '%s' "$(basename_of "$top")"
+    fi
+}
+
 # Load config.toml into globals. The plugin is opt-in: TEMPLATE stays empty
 # unless the user configured one, and every entry point checks for it before
 # doing anything.
@@ -142,6 +168,24 @@ render_template() {
     # Unknown placeholders render as empty strings.
     out="$(printf '%s' "$out" | sed -E 's/\{[^}]*\}//g')"
     printf '%s' "$out"
+}
+
+# Extract the worktree entry for a workspace from a `herdr worktree list`
+# response. Preference order: the worktree opened in that workspace, then
+# the worktree whose checkout path matches the workspace cwd (a worktree can
+# be open in several workspaces but herdr records one opener), then the
+# first entry, but only when the repo has exactly one worktree (guessing a
+# branch in a multi-worktree repo risks a wrong PR number). Prints a JSON
+# object or nothing.
+worktree_for_ws() {
+    local json="$1" ws_id="$2" cwd="$3"
+    # $w and $c are jq variables bound by --arg, not shell expansions.
+    # shellcheck disable=SC2016
+    printf '%s' "$json" | jq -c --arg w "$ws_id" --arg c "$cwd" \
+        '([.result.worktrees // [] | .[] | select(.open_workspace_id == $w)][0]
+          // ([.result.worktrees // [] | .[] | select($c != "" and .path == $c)][0])
+          // (if ((.result.worktrees // []) | length) == 1 then (.result.worktrees // [])[0] else empty end)
+          // empty)' 2>/dev/null || true
 }
 
 # Parse the [repo-alias] table from config.toml into REPO_ALIASES. Only keys

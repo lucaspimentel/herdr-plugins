@@ -77,14 +77,6 @@ if [ -z "$wt_path" ]; then
     wt_path="$(jget "$event_json" '.data.workspace.worktree.checkout_path // empty')"
 fi
 
-if [ -z "$branch" ]; then
-    wt_json="$(run_herdr worktree list --workspace "$ws_id" 2>/dev/null || true)"
-    branch="$(jget "$wt_json" '.result.worktrees[0].branch // empty')"
-    if [ -z "$wt_path" ]; then
-        wt_path="$(jget "$wt_json" '.result.worktrees[0].path // empty')"
-    fi
-fi
-
 # cwd: context, then worktree checkout path, then the agent list.
 cwd="$(jget "$context_json" '.workspace_cwd // empty')"
 if [ -z "$cwd" ]; then
@@ -97,19 +89,30 @@ if [ -z "$cwd" ]; then
     cwd="$(jget "$ag_json" --arg w "$ws_id" '([.result.agents // [] | .[] | select(.workspace_id == $w)][0].cwd) // empty')"
 fi
 
-# Repo name: context, then event payload, then git toplevel basename.
+# Repo name: context, then event payload, then the worktree CLI, then git.
+# The worktree CLI is authoritative because linked worktree checkout
+# directories are often named after the branch, not the repo.
 repo="$(jget "$context_json" '.worktree.repo_name // empty')"
 if [ -z "$repo" ]; then
     repo="$(jget "$event_json" '.data.workspace.worktree.repo_name // empty')"
 fi
-if [ -z "$repo" ]; then
-    src_dir="$cwd"
-    if [ -n "$src_dir" ] && [ -d "$src_dir" ]; then
-        top="$(git -C "$src_dir" rev-parse --show-toplevel 2>/dev/null || true)"
-        if [ -n "$top" ]; then
-            repo="$(basename_of "$top")"
+
+if [ -z "$branch" ] || [ -z "$repo" ]; then
+    wt_json="$(run_herdr worktree list --workspace "$ws_id" 2>/dev/null || true)"
+    if [ -z "$branch" ]; then
+        wt_entry="$(worktree_for_ws "$wt_json" "$ws_id" "$cwd")"
+        branch="$(jget "$wt_entry" '.branch // empty')"
+        if [ -z "$wt_path" ]; then
+            wt_path="$(jget "$wt_entry" '.path // empty')"
         fi
     fi
+    if [ -z "$repo" ]; then
+        repo="$(jget "$wt_json" '.result.source.repo_name // empty')"
+    fi
+fi
+
+if [ -z "$repo" ]; then
+    repo="$(git_repo_name "$cwd")"
 fi
 
 # Agent kind: event payload, then context, then the agent list.
