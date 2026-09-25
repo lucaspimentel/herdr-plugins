@@ -351,7 +351,7 @@ run_hook worktree.created \
     "$(mk_ctx w2 workspace "$TMP/wtdir" demo-repo)"
 t "P5 gh fallback PR" "w2	demo-repo #42" "$(last_rename)"
 t "P5 gh invoked once" "1" "$(gh_call_count)"
-t "P5 cache written" "42" "$(cat "$HERDR_PLUGIN_STATE_DIR"/pr-cache/* 2>/dev/null)"
+t "P5 cache written" "42" "$(cut -d'|' -f1 "$HERDR_PLUGIN_STATE_DIR"/pr-cache/* 2>/dev/null)"
 
 # P6: a repeat event for the same branch is served from cache, not gh.
 run_hook worktree.created \
@@ -370,11 +370,63 @@ run_hook worktree.created \
     "$(mk_ctx w2 workspace "$TMP/wtdir" demo-repo)"
 t "P7 miss drops suffix" "w2	demo-repo" "$(last_rename)"
 t "P7 miss invokes gh once" "1" "$(gh_call_count)"
-t "P7 negative cache written" "none" "$(cat "$HERDR_PLUGIN_STATE_DIR"/pr-cache/* 2>/dev/null)"
+t "P7 negative cache written" "none" "$(cut -d'|' -f1 "$HERDR_PLUGIN_STATE_DIR"/pr-cache/* 2>/dev/null)"
 run_hook worktree.created \
     "$(mk_evt_wtcreate w2 workspace 2 feature-x "$TMP/wtdir" demo-repo)" \
     "$(mk_ctx w2 workspace "$TMP/wtdir" demo-repo)"
 t "P7 negative cache avoids gh" "1" "$(gh_call_count)"
+
+# P7b: a cached miss expires after pr-miss-ttl-seconds and re-resolves, so a
+# PR opened after the miss was cached is picked up.
+reset_env
+mkdir -p "$TMP/wtdir"
+mk_gh_stub '[]'
+write_config 'template = "{repo-name} {pr}"'
+run_hook worktree.created \
+    "$(mk_evt_wtcreate w2 workspace 2 feature-x "$TMP/wtdir" demo-repo)" \
+    "$(mk_ctx w2 workspace "$TMP/wtdir" demo-repo)"
+t "P7b miss cached" "1" "$(gh_call_count)"
+pr_cache_file_="$(printf '%s\n' "$HERDR_PLUGIN_STATE_DIR"/pr-cache/*)"
+printf 'none|1' > "$pr_cache_file_"
+printf '%s' '[{"number":99}]' > "$GH_RESPONSE_FILE"
+run_hook worktree.created \
+    "$(mk_evt_wtcreate w2 workspace 2 feature-x "$TMP/wtdir" demo-repo)" \
+    "$(mk_ctx w2 workspace "$TMP/wtdir" demo-repo)"
+t "P7b expired miss re-resolves" "2" "$(gh_call_count)"
+t "P7b PR picked up" "w2	demo-repo #99" "$(last_rename)"
+t "P7b fresh hit cached" "99" "$(cut -d'|' -f1 "$pr_cache_file_")"
+
+# P7c: pr-miss-ttl-seconds = 0 means a miss is cached forever.
+reset_env
+mkdir -p "$TMP/wtdir"
+mk_gh_stub '[]'
+write_config 'template = "{repo-name} {pr}"' 'pr-miss-ttl-seconds = "0"'
+run_hook worktree.created \
+    "$(mk_evt_wtcreate w2 workspace 2 feature-x "$TMP/wtdir" demo-repo)" \
+    "$(mk_ctx w2 workspace "$TMP/wtdir" demo-repo)"
+t "P7c miss cached" "1" "$(gh_call_count)"
+pr_cache_file_="$(printf '%s\n' "$HERDR_PLUGIN_STATE_DIR"/pr-cache/*)"
+printf 'none|1' > "$pr_cache_file_"
+printf '%s' '[{"number":99}]' > "$GH_RESPONSE_FILE"
+run_hook worktree.created \
+    "$(mk_evt_wtcreate w2 workspace 2 feature-x "$TMP/wtdir" demo-repo)" \
+    "$(mk_ctx w2 workspace "$TMP/wtdir" demo-repo)"
+t "P7c never-expire miss avoids gh" "1" "$(gh_call_count)"
+t "P7c never-expire miss stays empty" "w2	demo-repo" "$(last_rename)"
+
+# P7d: legacy cache entries without a timestamp are treated as expired and
+# re-resolve once, healing stale pre-TTL caches.
+reset_env
+mkdir -p "$TMP/wtdir" "$HERDR_PLUGIN_STATE_DIR/pr-cache"
+mk_gh_stub '[{"number":7}]'
+write_config 'template = "{repo-name} {pr}"'
+printf 'none' > "$HERDR_PLUGIN_STATE_DIR/pr-cache/demo-repo_feature-x"
+run_hook worktree.created \
+    "$(mk_evt_wtcreate w2 workspace 2 feature-x "$TMP/wtdir" demo-repo)" \
+    "$(mk_ctx w2 workspace "$TMP/wtdir" demo-repo)"
+t "P7d legacy miss re-resolves" "1" "$(gh_call_count)"
+t "P7d legacy rewritten with PR" "w2	demo-repo #7" "$(last_rename)"
+t "P7d legacy entry upgraded" "7" "$(cut -d'|' -f1 "$HERDR_PLUGIN_STATE_DIR/pr-cache/demo-repo_feature-x")"
 
 # P8: no {pr} in the template means the gh lookup never runs.
 reset_env

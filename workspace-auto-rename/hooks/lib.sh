@@ -34,6 +34,11 @@ ONLY_RENAME_UNMODIFIED="true"
 RENAME_ON_AGENT_DETECT="true"
 RENAME_ON_CWD_CHANGE="true"
 ADOPT_EXISTING="true"
+# {pr} cache lifetimes in seconds: hits (a resolved PR number) default to a
+# day, misses ("none") to an hour, so a PR opened after a miss is picked up
+# on a later render. 0 disables expiry.
+PR_HIT_TTL="86400"
+PR_MISS_TTL="3600"
 
 # Extra labels treated as unmodified by decide_rename, one per line. Set by
 # on-event.sh for cwd-change events so herdr's own auto-naming from a
@@ -151,6 +156,14 @@ load_config() {
     if [ -z "$ADOPT_EXISTING" ]; then
         ADOPT_EXISTING="true"
     fi
+    PR_HIT_TTL="$(config_get "$cfg" pr-hit-ttl-seconds)"
+    if ! [[ "$PR_HIT_TTL" =~ ^[0-9]+$ ]]; then
+        PR_HIT_TTL="86400"
+    fi
+    PR_MISS_TTL="$(config_get "$cfg" pr-miss-ttl-seconds)"
+    if ! [[ "$PR_MISS_TTL" =~ ^[0-9]+$ ]]; then
+        PR_MISS_TTL="3600"
+    fi
 }
 
 # Substitute {var} placeholders in a template. Unknown placeholders render as
@@ -261,6 +274,51 @@ pr_cache_file() {
     printf '%s/pr-cache/%s' "$state_dir" "${safe:0:120}"
 }
 
+# Read a cached {pr} lookup result and enforce its TTL. Prints the cached
+# value (a number for a hit, "none" for a fresh miss, so the caller can tell
+# it apart from having no cache entry) and nothing when the entry is
+# missing, malformed, or expired. Cache entries store "<value>|<epoch>".
+# A TTL of 0 means never expire. Entries written before TTL support (no
+# timestamp) count as expired, so stale pre-TTL caches are re-resolved once
+# and rewritten in the new format.
+pr_cache_read() {
+    local repo="$1" branch="$2" file line num ts ttl age now
+    file="$(pr_cache_file "$repo/$branch")" || return 0
+    [ -f "$file" ] || return 0
+    line="$(<"$file")"
+    case "$line" in
+        *'|'[0-9]*)
+            num="${line%|*}"
+            ts="${line##*|}"
+            ;;
+        *)
+            # Legacy format without a timestamp: treat as expired.
+            return 0
+            ;;
+    esac
+    if [ "$num" = "none" ]; then
+        if [ "$PR_MISS_TTL" = "0" ]; then
+            printf 'none'
+            return 0
+        fi
+        ttl="$PR_MISS_TTL"
+    elif [[ "$num" =~ ^[0-9]+$ ]]; then
+        if [ "$PR_HIT_TTL" = "0" ]; then
+            printf '%s' "$num"
+            return 0
+        fi
+        ttl="$PR_HIT_TTL"
+    else
+        # Malformed value: re-resolve.
+        return 0
+    fi
+    now="$(date +%s)"
+    age=$((now - ts))
+    if [ "$age" -lt "$ttl" ]; then
+        printf '%s' "$num"
+    fi
+}
+
 # Extract a PR number encoded in a branch name. Recognized shapes:
 #   pr-123, pr/123, pr-123-short-description, pr123, 123, 123-short-description
 # Prints the number and returns 0 on a match; returns 1 otherwise.
@@ -295,21 +353,24 @@ pr_from_gh() {
 }
 
 # Resolve the GitHub PR number for a branch, if one can be found. Detection
-# order: cached value, branch-name pattern, gh CLI lookup. Prints the number
-# or nothing. Both hits and misses are cached in the plugin state dir so
-# repeated events never re-hit the network.
+# order: cached value (subject to its TTL), branch-name pattern, gh CLI
+# lookup. Prints the number or nothing. Both hits and misses are cached in
+# the plugin state dir with a timestamp: hits expire after
+# pr-hit-ttl-seconds, misses after pr-miss-ttl-seconds, so a PR opened after
+# a miss is picked up on a later render.
 resolve_pr() {
     local branch="$1" repo="$2" wt_path="$3"
-    local num="" cache=""
+    local num="" cache="" now
 
     [ -n "$branch" ] || return 0
 
     if cache="$(pr_cache_file "$repo/$branch")"; then
-        if [ -f "$cache" ]; then
-            num="$(<"$cache")"
-            if [ "$num" != "none" ] && [ -n "$num" ]; then
-                printf '%s' "$num"
-            fi
+        num="$(pr_cache_read "$repo" "$branch")"
+        if [ "$num" = "none" ]; then
+            return 0
+        fi
+        if [ -n "$num" ]; then
+            printf '%s' "$num"
             return 0
         fi
     fi
@@ -331,10 +392,11 @@ resolve_pr() {
 
     if [ -n "$cache" ]; then
         mkdir -p "${cache%/*}" 2>/dev/null || true
+        now="$(date +%s)"
         if [ -n "$num" ]; then
-            printf '%s' "$num" > "$cache" 2>/dev/null || true
+            printf '%s|%s' "$num" "$now" > "$cache" 2>/dev/null || true
         else
-            printf 'none' > "$cache" 2>/dev/null || true
+            printf 'none|%s' "$now" > "$cache" 2>/dev/null || true
         fi
     fi
 

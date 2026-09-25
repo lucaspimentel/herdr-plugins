@@ -72,6 +72,8 @@ Then edit `template`. Until `template` is set, the plugin stays inert.
 | `rename-on-agent-detect` | `true`             | Also rename when an agent is detected in a workspace still carrying its birth label |
 | `rename-on-cwd-change`   | `true`             | Re-render on focus or agent status change after the workspace cwd changed; herdr's auto-naming from the old cwd is not treated as a manual rename |
 | `adopt-existing`         | `true`             | On startup and agent detection, rename never-before-seen workspaces; set `false` to only record their labels, protecting names that predate the install |
+| `pr-hit-ttl-seconds`     | `86400`            | How long a cached `{pr}` hit (a resolved PR number) stays valid, in seconds; `0` never expires |
+| `pr-miss-ttl-seconds`    | `3600`             | How long a cached `{pr}` miss (`none`) stays valid, in seconds; `0` never expires. A short TTL here is what lets a PR opened after a miss show up on a later render |
 
 ## Template variables
 
@@ -83,7 +85,7 @@ Then edit `template`. Until `template` is set, the plugin stays inert.
 | `{worktree-basename}` | Worktree checkout path basename |
 | `{agent-kind}`        | Agent detection event, focused pane agent, or `herdr agent list` |
 | `{agent-name}`        | Best-effort; usually empty (herdr exposes no display-name field in `agent list`) |
-| `{pr}`                | PR number for the branch, rendered as a unit (`#1234`, or empty when none): branch-name pattern (`pr-123`, `pr/123`, `pr123`, `123-fix`) first, then `gh pr list --head` when `gh` is installed; cached per repo and branch, including misses |
+| `{pr}`                | PR number for the branch, rendered as a unit (`#1234`, or empty when none): branch-name pattern (`pr-123`, `pr/123`, `pr123`, `123-fix`) first, then `gh pr list --head` when `gh` is installed; cached per repo and branch with a timestamp: hits expire after `pr-hit-ttl-seconds` (default 1 day), misses after `pr-miss-ttl-seconds` (default 1 hour) |
 | `{workspace-id}`      | Workspace id, e.g. `w2` |
 | `{workspace-number}`  | Workspace number |
 | `{current-label}`     | The label at event time |
@@ -130,4 +132,6 @@ goes through `tests/fake-herdr` via `HERDR_BIN_PATH`.
 - `{agent-name}` is best-effort and usually renders empty.
 - The first `[[startup]]` pass with `{pr}` in the template may perform one
   `gh` lookup per distinct repo and branch; results are cached in the plugin
-  state directory afterward, including branches with no PR.
+  state directory afterward, including branches with no PR. Cache entries
+  written by plugin versions before TTL support (no timestamp) count as
+  expired and are re-resolved once on the next render.

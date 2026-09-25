@@ -18,7 +18,10 @@
 # otherwise, so "{repo-name} {pr}" degrades to just the repo name. PRs are
 # detected from the branch name (pr-123, pr/123, pr123, 123-fix) first, then
 # via the GitHub CLI (gh) when installed. Results are cached per repo and
-# branch, including misses.
+# branch with a timestamp: hits expire after pr-hit-ttl-seconds, misses
+# after pr-miss-ttl-seconds, so a PR opened after a miss is picked up when
+# the miss expires. Entries written by older plugin versions (no timestamp)
+# are treated as expired and re-resolve once.
 template = "{repo-name}/{branch}"
 
 # Template used when no git branch is known (non-git working directory).
@@ -40,6 +43,13 @@ rename-on-cwd-change = true
 # unmodified and rename them. Set to false to only record their labels:
 # this protects names that predate the plugin install.
 adopt-existing = true
+
+# {pr} cache lifetimes in seconds. Hits (a resolved PR number) default to
+# one day, misses ("none") to one hour, so a PR opened after a miss is
+# picked up on a later render. Set either to 0 to never expire that kind of
+# entry.
+pr-hit-ttl-seconds = "86400"
+pr-miss-ttl-seconds = "3600"
 
 # Map repository names to shorter display strings for {repo-name}.
 # Repositories not listed here keep their full name.
